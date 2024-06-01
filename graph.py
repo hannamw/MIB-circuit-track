@@ -13,7 +13,7 @@ from .visualization import EDGE_TYPE_COLORS, generate_random_color
 
 class Node:
     """
-    A node in our computational graph. The in_hook is the TL hook into its inputs, 
+    A node in our computational graph. The in_hook is the TLens hook into its inputs, 
     while the out_hook gets its outputs.
     """
     name: str
