@@ -206,6 +206,11 @@ def compute_mean_activations(model: HookedTransformer, graph: Graph, dataloader:
     return means if per_position else means.mean(0)
 
 
+# def get_scores_eap_nnsight(model: UnifiedTransformer, graph: Graph, dataloader:DataLoader, metric: Callable[[Tensor], Tensor], intervention: Literal['patching', 'zero', 'mean','mean-positional']='patching', intervention_dataloader: Optional[DataLoader]=None, quiet=False):
+
+
+
+
 def get_scores_eap(model: HookedTransformer, graph: Graph, dataloader:DataLoader, metric: Callable[[Tensor], Tensor], intervention: Literal['patching', 'zero', 'mean','mean-positional']='patching', intervention_dataloader: Optional[DataLoader]=None, quiet=False):
     """Gets edge attribution scores using EAP.
 
@@ -219,7 +224,8 @@ def get_scores_eap(model: HookedTransformer, graph: Graph, dataloader:DataLoader
     Returns:
         Tensor: a [src_nodes, dst_nodes] tensor of scores for each edge
     """
-    scores = torch.zeros((graph.n_forward, graph.n_backward), device='cuda', dtype=model.cfg.dtype)    
+    # scores = torch.zeros((graph.n_forward, graph.n_backward), device='cuda', dtype=model.cfg.dtype)
+    scores = torch.zeros((graph.n_forward, graph.n_backward), device='cpu', dtype=model.cfg.dtype)
 
     if 'mean' in intervention:
         assert intervention_dataloader is not None, "Intervention dataloader must be provided for mean interventions"

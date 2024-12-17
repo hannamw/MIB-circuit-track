@@ -1,0 +1,6 @@
+pip3 install torch torchvision torchaudio
+pip install transformer-lens==2.9.1
+pip install einops==0.8.0
+pip install notebook
+pip install cmapy
+conda install --channel conda-forge pygraphviz
