@@ -50,6 +50,15 @@ def make_hooks_and_matrices(model: HookedTransformer, graph: Graph, batch_size:i
     Returns:
         Tuple[Tuple[List, List, List], Tensor]: The final tensor ([batch, pos, n_src_nodes, d_model]) stores activation differences, i.e. corrupted - clean activations. The first set of hooks will add in the activations they are run on (run these on corrupted input), while the second set will subtract out the activations they are run on (run these on clean input). The third set of hooks will compute the gradients and update the scores matrix that you passed in. 
     """
+    # Q: when we're doing the backward pass, we're going to need to know the previous layer's activations.
+    # A: we're going to store the activations at each layer in a tensor, and then use that tensor to compute the gradients
+    # Q: how do we store the activations?
+    # A: we're going to use hooks to fill up the tensor. We're going to have a forward hook for each layer that adds in the activations,
+    # and a backward hook that computes the gradients and updates the scores tensor.
+    # Q: how do we know which activations to add in?
+    # A: we're going to use the forward hooks to keep track of the activations. We're going to have a forward hook for each layer that adds in the activations,
+    # and a backward hook that computes the gradients and updates the scores tensor.
+    # Q: when we need separate activations, how do we store them?
     separate_activations = model.cfg.use_normalization_before_and_after and scores is None
     if separate_activations:
         activation_difference = torch.zeros((2, batch_size, n_pos, graph.n_forward, model.cfg.d_model), device=model.cfg.device, dtype=model.cfg.dtype)
@@ -206,7 +215,6 @@ def compute_mean_activations(model: HookedTransformer, graph: Graph, dataloader:
     return means if per_position else means.mean(0)
 
 
-# def get_scores_eap_nnsight(model: UnifiedTransformer, graph: Graph, dataloader:DataLoader, metric: Callable[[Tensor], Tensor], intervention: Literal['patching', 'zero', 'mean','mean-positional']='patching', intervention_dataloader: Optional[DataLoader]=None, quiet=False):
 
 
 

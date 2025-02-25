@@ -191,7 +191,8 @@ def evaluate_graph(model: HookedTransformer, graph: Graph, dataloader: DataLoade
 
             # For some metrics (e.g. accuracy or KL), we need the clean logits
             clean_logits = model(clean_tokens, attention_mask=attention_mask)
-                
+            
+            # Using the activation_difference
             with model.hooks(fwd_hooks_clean + input_construction_hooks):
                 logits = model(clean_tokens, attention_mask=attention_mask)
 

@@ -5,6 +5,7 @@ import heapq
 from einops import einsum
 import torch
 from transformer_lens import HookedTransformer, HookedTransformerConfig
+from nnsight import LanguageModel
 import numpy as np
 import pygraphviz as pgv
 
@@ -589,6 +590,10 @@ class Graph:
         """
         graph = Graph()
         graph.cfg = GraphConfig()
+
+
+
+        # print(f"Model or config: {model_or_config}, type: {type(model_or_config)}, isinstance(model_or_config, LanguageModel): {isinstance(model_or_config, LanguageModel)}, isinstance(model_or_config, GPT2LMHeadModel): {isinstance(model_or_config, GPT2LMHeadModel)}")
         if isinstance(model_or_config, HookedTransformer):
             cfg = model_or_config.cfg
             graph.cfg.update({'n_layers': cfg.n_layers, 'n_heads': cfg.n_heads, 'parallel_attn_mlp':cfg.parallel_attn_mlp, 'd_model': cfg.d_model})
@@ -597,6 +602,11 @@ class Graph:
             graph.cfg.update({'n_layers': cfg.n_layers, 'n_heads': cfg.n_heads, 'parallel_attn_mlp':cfg.parallel_attn_mlp, 'd_model': cfg.d_model})
         elif isinstance(model_or_config, dict):
             graph.cfg.update(model_or_config)
+        elif isinstance(model_or_config, LanguageModel):
+            cfg = model_or_config.config
+            # graph.cfg.update({'n_layers': cfg.n_layer, 'n_heads': cfg.n_head, 'parallel_attn_mlp':cfg.parallel_attn_mlp, 'd_model': cfg.d_model})
+            # graph.cfg.update({'n_layers': cfg.n_layer, 'n_heads': cfg.n_head, 'parallel_attn_mlp':cfg.parallel_attn_mlp, 'd_model': cfg.d_model})
+            graph.cfg.update({'n_layers': cfg.n_layer, 'n_heads': cfg.n_head, 'parallel_attn_mlp':False, 'd_model': cfg.n_embd})
         else:
             raise ValueError(f"Invalid input type: {type(model_or_config)}")
             
