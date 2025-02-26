@@ -78,168 +78,39 @@ def to_tokens(tokenizer, model, input_text, prepend_bos=True, padding_side='righ
     
     return tokens['input_ids']
 
-# def tokenize_plus_nnsight(model: HookedTransformer, inputs: List[str], max_length: Optional[int] = None):
-#     """
-#     Tokenizes the input strings using the provided model.
-
-#     Args:
-#         model (HookedTransformer): The model used for tokenization.
-#         inputs (List[str]): The list of input strings to be tokenized.
-
-#     Returns:
-#         tuple: A tuple containing the following elements:
-#             - tokens (torch.Tensor): The tokenized inputs.
-#             - attention_mask (torch.Tensor): The attention mask for the tokenized inputs.
-#             - input_lengths (torch.Tensor): The lengths of the tokenized inputs.
-#             - n_pos (int): The maximum sequence length of the tokenized inputs.
-#     """
-#     if max_length is not None:
-#         old_n_ctx = model.config.n_ctx
-#         model.config.n_ctx = max_length
-
-
-#     # tokens = model.to_tokens(inputs, prepend_bos=True, padding_side='right', truncate=(max_length is not None))
-#     # Shun's change
-#     tokenizer = model.tokenizer
-#     tokens = to_tokens(tokenizer, model, inputs, prepend_bos=True, padding_side='right', truncate=(max_length is not None))
-    
-    
-#     if max_length is not None:
-#         model.config.n_ctx = old_n_ctx
-#     attention_mask = get_attention_mask(model.tokenizer, tokens, True)
-#     input_lengths = attention_mask.sum(1)
-#     n_pos = attention_mask.size(1)
-#     return tokens, attention_mask, input_lengths, n_pos
-
-def tokenize_plus_nnsight(model, graph: Graph, dataloader: DataLoader, metric: Callable[[Tensor], Tensor], 
-                       intervention: Literal['patching', 'zero', 'mean','mean-positional']='patching', 
-                       intervention_dataloader: Optional[DataLoader]=None, quiet=False):
-    """Gets edge attribution scores using EAP with nnsight.
-    Returns:
-        Tensor: a [src_nodes, dst_nodes] tensor of scores for each edge
+def tokenize_plus_nnsight(model: HookedTransformer, inputs: List[str], max_length: Optional[int] = None):
     """
-    scores = torch.zeros((graph.n_forward, graph.n_backward), device='cpu', dtype=model.dtype)
+    Tokenizes the input strings using the provided model.
 
-    if 'mean' in intervention:
-        assert intervention_dataloader is not None, "Intervention dataloader must be provided for mean interventions"
-        per_position = 'positional' in intervention
-        means = compute_mean_activations_nns(model, graph, intervention_dataloader, per_position=per_position)
-        means = means.unsqueeze(0)
-        if not per_position:
-            means = means.unsqueeze(0)
+    Args:
+        model (HookedTransformer): The model used for tokenization.
+        inputs (List[str]): The list of input strings to be tokenized.
+
+    Returns:
+        tuple: A tuple containing the following elements:
+            - tokens (torch.Tensor): The tokenized inputs.
+            - attention_mask (torch.Tensor): The attention mask for the tokenized inputs.
+            - input_lengths (torch.Tensor): The lengths of the tokenized inputs.
+            - n_pos (int): The maximum sequence length of the tokenized inputs.
+    """
+    if max_length is not None:
+        old_n_ctx = model.config.n_ctx
+        model.config.n_ctx = max_length
+
+
+    # tokens = model.to_tokens(inputs, prepend_bos=True, padding_side='right', truncate=(max_length is not None))
+    # Shun's change
+    tokenizer = model.tokenizer
+    tokens = to_tokens(tokenizer, model, inputs, prepend_bos=True, padding_side='right', truncate=(max_length is not None))
     
-    total_items = 0
-    dataloader = dataloader if quiet else tqdm(dataloader)
-    for clean, corrupted, label in dataloader:
-        batch_size = len(clean)
-        total_items += batch_size
-        clean_tokens, attention_mask, input_lengths, n_pos = tokenize_plus_nns(model, clean)
-        corrupted_tokens, _, _, _ = tokenize_plus_nns(model, corrupted)
+    
+    if max_length is not None:
+        model.config.n_ctx = old_n_ctx
+    attention_mask = get_attention_mask(model.tokenizer, tokens, True)
+    input_lengths = attention_mask.sum(1)
+    n_pos = attention_mask.size(1)
+    return tokens, attention_mask, input_lengths, n_pos
 
-        activation_difference = torch.zeros((batch_size, n_pos, graph.n_forward, model.config.hidden_size), 
-                                         device=model.device, dtype=model.dtype)
-
-        with torch.inference_mode():
-            if intervention == 'patching':
-                # Get corrupted activations
-                with model.trace({"input_ids": corrupted_tokens, "attention_mask": attention_mask}):
-                    # Input embeddings
-                    node = graph.nodes['input']
-                    fwd_index = graph.forward_index(node)
-                    activation_difference[:, :, fwd_index] += model.transformer.wte.output
-
-                    for layer in range(graph.cfg['n_layers']):
-                        # Attention heads
-                        node = graph.nodes[f'a{layer}.h0']
-                        fwd_index = graph.forward_index(node)
-                        
-                        attn_hs = model.transformer.h[layer].attn.c_proj.input
-                        attn_hs = attn_hs.view(attn_hs.shape[0], attn_hs.shape[1], 
-                                             model.config.n_head, model.config.hidden_size // model.config.n_head)
-                        
-                        W_O = model.transformer.h[layer].attn.c_proj.weight.view(
-                            model.config.n_head, model.config.hidden_size // model.config.n_head, model.config.hidden_size)
-                        
-                        by_head = einsum(attn_hs, W_O, 
-                                       "batch pos head_idx head_dim, head_idx head_dim model_dim -> batch pos head_idx model_dim")
-                        
-                        activation_difference[:, :, fwd_index] += by_head
-
-                        # MLP
-                        node = graph.nodes[f'm{layer}']
-                        fwd_index = graph.forward_index(node)
-                        activation_difference[:, :, fwd_index] += model.transformer.h[layer].mlp.output
-                    
-            elif 'mean' in intervention:
-                activation_difference += means
-
-            # Get clean logits
-            clean_logits = model.trace({'input_ids': clean_tokens, 
-                                      'attention_mask': attention_mask}, 
-                                     trace=False)['logits']
-
-            # Get clean activations and compute gradients
-            with model.trace({"input_ids": clean_tokens, "attention_mask": attention_mask}):
-                # Input embeddings
-                node = graph.nodes['input']
-                fwd_index = graph.forward_index(node)
-                activation_difference[:, :, fwd_index] -= model.transformer.wte.output
-
-                for layer in range(graph.cfg['n_layers']):
-                    # Process QKV inputs
-                    if any(graph.nodes[f'a{layer}.h{head}'].in_graph for head in range(model.config.n_head)):
-                        node = graph.nodes[f'a{layer}.h0']
-                        prev_index = graph.prev_index(node)
-                        bwd_index = graph.backward_index(node, qkv='q', attn_slice=False)
-                        bwd_index = slice(bwd_index, bwd_index + 3 * model.config.n_head)
-                        
-                        # Update scores based on QKV differences
-                        if activation_difference.shape[-1] == model.config.hidden_size:
-                            grads = model.transformer.h[layer].ln_1.input.grad
-                            grads = grads.unsqueeze(2)  # Add head dimension
-                            s = einsum(activation_difference[:, :, :prev_index], grads,
-                                     'batch pos forward hidden, batch pos backward hidden -> forward backward')
-                            scores[:prev_index, bwd_index] += s.squeeze(1)
-
-                    # Process attention outputs
-                    node = graph.nodes[f'a{layer}.h0']
-                    fwd_index = graph.forward_index(node)
-                    
-                    attn_hs = model.transformer.h[layer].attn.c_proj.input
-                    attn_hs = attn_hs.view(attn_hs.shape[0], attn_hs.shape[1], 
-                                         model.config.n_head, model.config.hidden_size // model.config.n_head)
-                    
-                    W_O = model.transformer.h[layer].attn.c_proj.weight.view(
-                        model.config.n_head, model.config.hidden_size // model.config.n_head, model.config.hidden_size)
-                    
-                    by_head = einsum(attn_hs, W_O, 
-                                   "batch pos head_idx head_dim, head_idx head_dim model_dim -> batch pos head_idx model_dim")
-                    
-                    activation_difference[:, :, fwd_index] -= by_head
-
-                    # Process MLP
-                    if graph.nodes[f'm{layer}'].in_graph:
-                        node = graph.nodes[f'm{layer}']
-                        prev_index = graph.prev_index(node)
-                        bwd_index = graph.backward_index(node)
-                        
-                        # Update scores based on MLP differences
-                        grads = model.transformer.h[layer].ln_2.input.grad
-                        s = einsum(activation_difference[:, :, :prev_index], grads,
-                                 'batch pos forward hidden, batch pos backward hidden -> forward backward')
-                        scores[:prev_index, bwd_index] += s.squeeze(1)
-
-                    node = graph.nodes[f'm{layer}']
-                    fwd_index = graph.forward_index(node)
-                    activation_difference[:, :, fwd_index] -= model.transformer.h[layer].mlp.output
-
-                # Get logits and compute metric
-                logits = model.lm_head.output.save()
-                metric_value = metric(logits, clean_logits, input_lengths, label)
-                metric_value.backward()
-
-    scores /= total_items
-    return scores
 
 def make_hooks_and_matrices(model: HookedTransformer, graph: Graph, batch_size:int , n_pos:int, scores: Optional[Tensor]):
     """Makes a matrix, and hooks to fill it and the score matrix up
@@ -344,91 +215,175 @@ def make_hooks_and_matrices(model: HookedTransformer, graph: Graph, batch_size:i
             
     return (fwd_hooks_corrupted, fwd_hooks_clean, bwd_hooks), activation_difference
 
+def compute_mean_activations_nns(model: HookedTransformer, graph: Graph, dataloader: DataLoader, per_position: bool=False):
+    return 
 
+def get_scores_eap_nnsight(model, graph: Graph, dataloader: DataLoader, metric: Callable[[Tensor], Tensor], 
+                       intervention: Literal['patching', 'zero', 'mean','mean-positional']='patching', 
+                       intervention_dataloader: Optional[DataLoader]=None, quiet=False):
+    """Gets edge attribution scores using EAP with nnsight.
 
-def get_scores_eap_nnsight(model: LanguageModel, graph: Graph, dataloader: DataLoader, metric: Callable[[Tensor], Tensor], intervention: Literal['patching', 'zero', 'mean','mean-positional']='patching', intervention_dataloader: Optional[DataLoader]=None, quiet=False):
+    Args:
+        model: The nnsight model to attribute
+        graph (Graph): Graph to attribute
+        dataloader (DataLoader): The data over which to attribute
+        metric (Callable[[Tensor], Tensor]): metric to attribute with respect to
+        intervention: Type of intervention to use
+        intervention_dataloader: Dataset for mean interventions 
+        quiet (bool, optional): suppress tqdm output. Defaults to False.
+
+    Returns:
+        Tensor: a [src_nodes, dst_nodes] tensor of scores for each edge
+    """
     scores = torch.zeros((graph.n_forward, graph.n_backward), device='cpu', dtype=model.dtype)
 
+    if 'mean' in intervention:
+        assert intervention_dataloader is not None, "Intervention dataloader must be provided for mean interventions"
+        per_position = 'positional' in intervention
+        # TODO: Implement compute_mean_activations_nns
+        means = compute_mean_activations_nns(model, graph, intervention_dataloader, per_position=per_position)
+        means = means.unsqueeze(0)
+        if not per_position:
+            means = means.unsqueeze(0)
+    
     total_items = 0
     dataloader = dataloader if quiet else tqdm(dataloader)
+    
     for clean, corrupted, label in dataloader:
         batch_size = len(clean)
         total_items += batch_size
-
-        
-        # clean_tokens, attention_mask, input_lengths, n_pos = tokenize_plus_nnsight(model, clean)
-        # corrupted_tokens, _, _, _ = tokenize_plus_nnsight(model, corrupted)
-
-        # Convert tokens to real tensors
         clean_tokens, attention_mask, input_lengths, n_pos = tokenize_plus_nnsight(model, clean)
-        clean_tokens = clean_tokens.clone().detach()  # Ensure real tensor
-        attention_mask = attention_mask.clone().detach()
-        
         corrupted_tokens, _, _, _ = tokenize_plus_nnsight(model, corrupted)
-        corrupted_tokens = corrupted_tokens.clone().detach()  # Ensure real tensor
+        
+        # Initialize activation difference tensor
+        activation_difference = torch.zeros((batch_size, n_pos, graph.n_forward, model.config.hidden_size), 
+                                            device=model.device, dtype=model.dtype)
 
         with torch.inference_mode():
             if intervention == 'patching':
-                activation_difference = torch.zeros(
-                    (batch_size, n_pos, graph.n_forward, model.config.hidden_size), 
-                    device=model.device, 
-                    dtype=model.dtype
-                )
-
-                # Get clean logits first using trace=False
-                # clean_logits = model.trace({'input_ids': clean_tokens, 'attention_mask':attention_mask}, trace=False)['logits']
-                
-                print(f"corrupted_tokens is {corrupted_tokens}")
-                print(f"attention_mask is {attention_mask}")
-                # Capture corrupted activations
+                # Collect corrupted activations
                 with model.trace({"input_ids": corrupted_tokens, "attention_mask": attention_mask}):
+                    # Input embeddings
+                    node = graph.nodes['input']
+                    fwd_index = graph.forward_index(node)
+                    activation_difference[:, :, fwd_index] += model.transformer.wte.output
+                    
+                    # Process each layer
                     for layer in range(graph.cfg['n_layers']):
+                        # Attention outputs
                         node = graph.nodes[f'a{layer}.h0']
                         fwd_index = graph.forward_index(node)
+                        
+                        # Get attention outputs by head
                         attn_hs = model.transformer.h[layer].attn.c_proj.input
-
-                        by_head = split_heads_nns(attn_hs, model.config.n_head, model.config.hidden_size)
-
-                        by_head = model.transformer.h[layer].attn.c_proj(by_head)
-                        by_head = model.transformer.h[layer].attn.resid_dropout(by_head)
+                        attn_hs = attn_hs.view(attn_hs.shape[0], attn_hs.shape[1], 
+                                             model.config.n_head, model.config.hidden_size // model.config.n_head)
+                        
+                        # Get output weights by head
+                        W_O = model.transformer.h[layer].attn.c_proj.weight.view(
+                            model.config.n_head, model.config.hidden_size // model.config.n_head, model.config.hidden_size)
+                        
+                        # Compute per-head contribution
+                        by_head = einsum(attn_hs, W_O, 
+                                       "batch pos head_idx head_dim, head_idx head_dim model_dim -> batch pos head_idx model_dim")
                         
                         activation_difference[:, :, fwd_index] += by_head
-
+                        
+                        # MLP outputs
                         node = graph.nodes[f'm{layer}']
                         fwd_index = graph.forward_index(node)
-                        activation_difference[:, :, fwd_index][:] += model.transformer.h[layer].mlp.output[:]
-
+                        activation_difference[:, :, fwd_index] += model.transformer.h[layer].mlp.output
+                        
             elif 'mean' in intervention:
+                # Use precomputed means
                 activation_difference += means
 
-            # Run with input modifications
+            # Get clean logits for metric calculation
+            clean_logits = model.trace({'input_ids': clean_tokens, 
+                                       'attention_mask': attention_mask}, 
+                                      trace=False)['logits']
+            
+            # Run on clean inputs and compute gradients
             with model.trace({"input_ids": clean_tokens, "attention_mask": attention_mask}):
+                # Subtract clean input embeddings
+                node = graph.nodes['input']
+                fwd_index = graph.forward_index(node)
+                activation_difference[:, :, fwd_index] -= model.transformer.wte.output
+                
+                # Enable gradient tracking for activation_difference
+                activation_difference.requires_grad_(True)
+                
+                # Process each layer
                 for layer in range(graph.cfg['n_layers']):
-                    if any(graph.nodes[f'a{layer}.h{head}'].in_graph for head in range(model.config.n_head)):
-                        # Get layer input
-                        qkv_inp = model.transformer.h[layer].ln_1.input
+                    # Subtract clean attention outputs
+                    node = graph.nodes[f'a{layer}.h0']
+                    fwd_index = graph.forward_index(node)
+                    
+                    # Get attention outputs by head
+                    attn_hs = model.transformer.h[layer].attn.c_proj.input
+                    attn_hs = attn_hs.view(attn_hs.shape[0], attn_hs.shape[1], 
+                                         model.config.n_head, model.config.hidden_size // model.config.n_head)
+                    
+                    # Get output weights by head
+                    W_O = model.transformer.h[layer].attn.c_proj.weight.view(
+                        model.config.n_head, model.config.hidden_size // model.config.n_head, model.config.hidden_size)
+                    
+                    # Compute per-head contribution
+                    by_head = einsum(attn_hs, W_O, 
+                                   "batch pos head_idx head_dim, head_idx head_dim model_dim -> batch pos head_idx model_dim")
+                    
+                    activation_difference[:, :, fwd_index] -= by_head
+                    
+                    # Apply QKV interventions
+                    qkv_inp = model.transformer.h[layer].ln_1.input
+                    qkv_inp = qkv_inp.unsqueeze(2).unsqueeze(3).repeat(1, 1, 3, model.config.n_head, 1)
+                    
+                    # For each QKV component
+                    for i, letter in enumerate('qkv'):
                         node = graph.nodes[f'a{layer}.h0']
-                        fwd_index = graph.forward_index(node)
+                        prev_index = graph.prev_index(node)
+                        bwd_index = graph.backward_index(node, qkv=letter, attn_slice=False)
                         
-                        update = activation_difference[:, :, fwd_index]
-                        model.transformer.h[layer].attn.output[:] += update
-
-                    # MLP handling
-                    if graph.nodes[f'm{layer}'].in_graph:
-                        node = graph.nodes[f'm{layer}']
-                        fwd_index = graph.forward_index(node)
-                        model.transformer.h[layer].mlp.output[:] += activation_difference[:, :, fwd_index]
-
+                        # Register hook for gradients
+                        def make_grad_hook(p_idx, b_idx):
+                            def hook(grad):
+                                # Similar to the gradient_hook in the original code
+                                if grad.ndim == 3:
+                                    grad = grad.unsqueeze(2)
+                                s = einsum(activation_difference[:, :, :p_idx], grad,
+                                         'batch pos forward hidden, batch pos backward hidden -> forward backward')
+                                scores[:p_idx, b_idx] += s.squeeze(1).detach()
+                                return grad
+                            return hook
+                        
+                        # Apply hook to QKV computation
+                        qkv_inp.register_hook(make_grad_hook(prev_index, bwd_index))
+                    
+                    # Subtract clean MLP outputs
+                    node = graph.nodes[f'm{layer}']
+                    fwd_index = graph.forward_index(node)
+                    prev_index = graph.prev_index(node)
+                    bwd_index = graph.backward_index(node)
+                    
+                    mlp_in = model.transformer.h[layer].ln_2.input
+                    mlp_in.register_hook(make_grad_hook(prev_index, bwd_index))
+                    
+                    activation_difference[:, :, fwd_index] -= model.transformer.h[layer].mlp.output
+                
+                # Final logits hook
+                node = graph.nodes['logits']
+                prev_index = graph.prev_index(node)
+                bwd_index = graph.backward_index(node)
+                
+                final_in = model.transformer.ln_f.input
+                final_in.register_hook(make_grad_hook(prev_index, bwd_index))
+                
+                # Get logits and compute loss
                 logits = model.lm_head.output.save()
-                metric_value = metric(logits, clean_logits, input_lengths, label)
-                metric_value.backward()
+                # metric_value = metric(logits, clean_logits, input_lengths, label)
+                # metric_value.backward()
 
-                # Collect gradients
-                grads = model.lm_head.output.grad
-                s = einsum(activation_difference, grads,
-                          'batch pos forward hidden, batch pos token -> forward')
-                scores += s
-
+    # Average scores over all examples
     scores /= total_items
     return scores
 
@@ -485,7 +440,7 @@ def attribute_nnsight(model: LanguageModel, graph: Graph, dataloader: DataLoader
 
 
 # model = LanguageModel('gpt2', device_map='cpu', dispatch='True')
-model = LanguageModel('gpt2', device_map='cpu')
+model = LanguageModel('gpt2', device_map='cpu', dispatch='True')
 
 model.config.use_split_qkv_input = True
 model.config.use_attn_result = True
