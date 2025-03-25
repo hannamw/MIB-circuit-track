@@ -318,6 +318,16 @@ class Graph:
         heads.append('logits')
         return heads
 
+    def get_layer_mask(self, layer: int) -> torch.Tensor:
+        """Vectorized mask generation for entire layer"""
+        # Returns (n_edges_in_layer, d_model) mask tensor
+        layer_edges = [e for e in self.edges.values() if e.child.layer == layer]
+        return torch.stack([
+            self.in_graph[e.matrix_index] * 
+            (self.neurons_in_graph[e.parent] if self.neurons_in_graph else 1)
+            for e in layer_edges
+        ]).sum(dim=0)  # Aggregates all edge contributions
+
     def weighted_edge_count(self) -> float:
         """Generates a count of the edges, weighted by number of neurons included if applicable
 
