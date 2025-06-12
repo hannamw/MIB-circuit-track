@@ -29,6 +29,8 @@ if __name__ == "__main__":
     parser.add_argument("--circuit-files", type=str, nargs='+', default=None)
     parser.add_argument("--output-dir", type=str, default='results')
     args = parser.parse_args()
+    
+    apply_greedy =  args.method in ["information-flow-routes"]#add your own method to the list if necessary
 
     i = 0
     for model_name in args.models:
@@ -78,8 +80,11 @@ if __name__ == "__main__":
             if model_name == "interpbench":
                 d = evaluate_area_under_roc(reference_graph, graph)
             else:
-                eval_auc_outputs = evaluate_area_under_curve(model, graph, dataloader, attribution_metric, level=args.level, 
-                                                            absolute=args.absolute)
+                eval_auc_outputs = evaluate_area_under_curve(
+                    model, graph, dataloader, attribution_metric, level=args.level,
+                    absolute=args.absolute,
+                    apply_greedy=apply_greedy,
+                )
                 weighted_edge_counts, area_under, area_from_1, average, faithfulnesses = eval_auc_outputs
                 d = {
                     "weighted_edge_counts": weighted_edge_counts,
